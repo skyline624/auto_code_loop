@@ -328,6 +328,9 @@ public sealed class GitHubBackend : IVersioningBackend
         return sb.ToString();
     }
 
+    public Task<string> GetUnifiedDiffAsync(CancellationToken ct = default)
+        => Task.FromResult(_localGit.GetUnifiedDiff());
+
     private static int ExtractPrNumber(string prUrl)
     {
         var parts = prUrl.TrimEnd('/').Split('/');

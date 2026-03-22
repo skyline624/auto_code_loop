@@ -11,5 +11,9 @@
     <Authors>AutoLoop</Authors>
     <Company>AutoLoop</Company>
     <Version>1.0.0</Version>
+
+    <!-- Sorties centralisées à la racine du repo -->
+    <BaseOutputPath>$(MSBuildThisFileDirectory)bin/$(MSBuildProjectName)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
   </PropertyGroup>
 </Project>

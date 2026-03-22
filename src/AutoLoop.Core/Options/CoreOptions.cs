@@ -19,4 +19,5 @@ public sealed class StorageOptions
     public string BaselinePath { get; set; } = "./storage/baseline.json";
     public string ChangeTrackerPath { get; set; } = "./storage/changes.jsonl";
     public string MemoryPath { get; set; } = "./storage/memory";
+    public string PromptsPath { get; set; } = "./storage/prompts";
 }

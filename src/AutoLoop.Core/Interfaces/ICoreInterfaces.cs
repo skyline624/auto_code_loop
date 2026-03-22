@@ -1,4 +1,5 @@
 using AutoLoop.Core.Models;
+using AutoLoop.Core.Prompts;
 
 namespace AutoLoop.Core.Interfaces;
 
@@ -24,6 +25,15 @@ public interface IClaudeCodeExecutor
     Task<ClaudeCodeResult> ExecuteWithConfirmationAsync(
         string prompt,
         string confirmationPrompt,
+        IEnumerable<string>? contextFiles = null,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Exécute Claude Code en mode agentique (sans --print) pour qu'il modifie les fichiers directement.
+    /// </summary>
+    Task<ClaudeCodeResult> ExecuteAgenticAsync(
+        string prompt,
+        string workingDirectory,
         IEnumerable<string>? contextFiles = null,
         CancellationToken ct = default);
 }
@@ -134,6 +144,8 @@ public interface IVersioningBackend
     Task DeleteBranchAsync(string branchName, CancellationToken ct = default);
 
     Task<IReadOnlyList<VersionEntry>> ListVersionHistoryAsync(CancellationToken ct = default);
+
+    Task<string> GetUnifiedDiffAsync(CancellationToken ct = default);
 }
 
 public interface IRollbackManager
@@ -177,5 +189,36 @@ public interface IAlertManager
         AlertSeverity severity,
         string title,
         string message,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Fournisseur de prompts pour chaque phase du cycle.
+/// Permet d'injecter des instructions adaptatives générées par Claude.
+/// </summary>
+public interface IPromptProvider
+{
+    Task<string> GetHypothesisPromptAsync(
+        UserIntent intent,
+        ProjectInfo project,
+        IReadOnlyList<CycleSummary> recentCycles,
+        MetricsSnapshot? metrics,
+        CancellationToken ct = default);
+
+    Task<string> GetMutationPromptAsync(
+        Hypothesis hypothesis,
+        ProjectInfo project,
+        CancellationToken ct = default);
+
+    Task<string> GetTestGenerationPromptAsync(
+        ChangeRecord appliedChange,
+        ProjectInfo project,
+        string hypothesisRationale,
+        CancellationToken ct = default);
+
+    Task<string> GetEvaluationPromptAsync(
+        Hypothesis hypothesis,
+        TestSuite testResults,
+        TestSuite? baseline,
         CancellationToken ct = default);
 }

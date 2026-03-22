@@ -27,6 +27,7 @@ public sealed class CycleOrchestrator : BackgroundService
     private readonly ICycleJournal _journal;
     private readonly IBaselineStore _baselineStore;
     private readonly IAlertManager _alertManager;
+    private readonly IPromptProvider _promptProvider;
     private readonly IOptions<CycleOptions> _options;
     private readonly ILogger<CycleOrchestrator> _logger;
     private readonly UserIntent? _userIntent;
@@ -47,6 +48,7 @@ public sealed class CycleOrchestrator : BackgroundService
         ICycleJournal journal,
         IBaselineStore baselineStore,
         IAlertManager alertManager,
+        IPromptProvider promptProvider,
         IOptions<CycleOptions> options,
         ILogger<CycleOrchestrator> logger,
         UserIntent? userIntent = null)
@@ -63,6 +65,7 @@ public sealed class CycleOrchestrator : BackgroundService
         _journal = journal;
         _baselineStore = baselineStore;
         _alertManager = alertManager;
+        _promptProvider = promptProvider;
         _options = options;
         _logger = logger;
         _userIntent = userIntent;
@@ -143,7 +146,7 @@ public sealed class CycleOrchestrator : BackgroundService
             context.CurrentPhase = CyclePhase.HypothesisGeneration;
             _logger.LogInformation("[Cycle {Id}] Phase 1 : Génération d'hypothèses via Claude Code", context.CycleId);
 
-            var hypothesisPrompt = PromptTemplates.GenerateHypotheses(
+            var hypothesisPrompt = await _promptProvider.GetHypothesisPromptAsync(
                 context.UserIntent ?? new UserIntent
                 {
                     OriginalIntent = "Improve the codebase",
@@ -153,7 +156,8 @@ public sealed class CycleOrchestrator : BackgroundService
                 },
                 context.Project!,
                 context.PreviousCycles,
-                metrics: null);
+                metrics: null,
+                ct);
 
             var hypothesisResult = await _claudeCodeExecutor.ExecuteAsync(
                 hypothesisPrompt,
@@ -200,14 +204,13 @@ public sealed class CycleOrchestrator : BackgroundService
                 return;
             }
 
-            // ── Phase 2 : Application de la mutation via Claude Code ──────────────
+            // ── Phase 2 : Application de la mutation via Claude Code (mode agentique) ──────────────
             context.CurrentPhase = CyclePhase.ChangeApplication;
-            _logger.LogInformation("[Cycle {Id}] Phase 2 : Application de la mutation", context.CycleId);
+            _logger.LogInformation("[Cycle {Id}] Phase 2 : Application de la mutation (mode agentique)", context.CycleId);
 
             await _versioning.CreateBranchAsync(context.CycleId.BranchName, ct);
 
             var topHypothesis = context.Hypotheses[0];
-            var mutationPrompt = PromptTemplates.ApplyMutation(topHypothesis, context.Project!);
 
             // Lire le contenu original AVANT que Claude Code ne modifie le fichier
             var originalContent = "";
@@ -221,14 +224,18 @@ public sealed class CycleOrchestrator : BackgroundService
                 }
             }
 
-            var mutationResult = await _claudeCodeExecutor.ExecuteAsync(
+            var mutationPrompt = await _promptProvider.GetMutationPromptAsync(topHypothesis, context.Project!, ct);
+
+            // Mode agentique : Claude modifie les fichiers directement via ses outils Edit/Write
+            var mutationResult = await _claudeCodeExecutor.ExecuteAgenticAsync(
                 mutationPrompt,
+                context.Project!.ProjectPath,
                 topHypothesis.TargetFile != null ? [topHypothesis.TargetFile] : null,
-                ct: ct);
+                ct);
 
             if (!mutationResult.Success)
             {
-                _logger.LogError("[Cycle {Id}] Échec de la mutation: {Error}",
+                _logger.LogError("[Cycle {Id}] Échec de la mutation agentique: {Error}",
                     context.CycleId, mutationResult.ErrorOutput);
                 context.Status = CycleStatus.Failed;
                 context.ErrorMessage = mutationResult.ErrorOutput;
@@ -236,29 +243,41 @@ public sealed class CycleOrchestrator : BackgroundService
                 return;
             }
 
-            // Parser la mutation et créer le ChangeRecord
-            var mutationResponse = parser.ParseMutationResponse(mutationResult.Output);
-            if (mutationResponse == null || mutationResponse.Changes.Count == 0)
+            // Récupérer le diff git pour vérifier que Claude a réellement modifié quelque chose
+            var unifiedDiff = await _versioning.GetUnifiedDiffAsync(ct);
+
+            if (string.IsNullOrWhiteSpace(unifiedDiff))
             {
-                _logger.LogWarning("[Cycle {Id}] Aucune mutation générée.", context.CycleId);
+                _logger.LogWarning("[Cycle {Id}] Aucun changement détecté après la mutation agentique — rollback.", context.CycleId);
                 context.Status = CycleStatus.Failed;
-                context.ErrorMessage = "No mutation generated";
+                context.ErrorMessage = "No changes detected after agentic mutation";
                 await ExecuteRollbackAsync(context, RollbackReason.UnhandledException, ct);
                 return;
             }
 
-            // Créer le ChangeRecord
-            var firstChange = mutationResponse.Changes[0];
+            // Lire le contenu muté depuis le disque
+            var mutatedContent = "";
+            if (topHypothesis.TargetFile != null && File.Exists(topHypothesis.TargetFile))
+            {
+                try { mutatedContent = await File.ReadAllTextAsync(topHypothesis.TargetFile, ct); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[Cycle {Id}] Impossible de lire le fichier muté : {File}",
+                        context.CycleId, topHypothesis.TargetFile);
+                }
+            }
+
+            // Créer le ChangeRecord depuis le diff git
             context.AppliedChange = new ChangeRecord
             {
                 Id = Guid.NewGuid(),
                 CycleId = context.CycleId,
                 HypothesisId = topHypothesis.Id,
                 CreatedAt = DateTimeOffset.UtcNow,
-                FilePath = firstChange.FilePath,
+                FilePath = topHypothesis.TargetFile ?? "unknown",
                 OriginalContent = originalContent,
-                MutatedContent = firstChange.NewContent ?? "",
-                UnifiedDiff = firstChange.Diff ?? "",
+                MutatedContent = mutatedContent,
+                UnifiedDiff = unifiedDiff,
                 MutationType = MutationType.Refactoring,
                 Rationale = topHypothesis.Rationale,
                 ClaudeCodePrompt = mutationPrompt,
@@ -274,9 +293,41 @@ public sealed class CycleOrchestrator : BackgroundService
                 "[Cycle {Id}] Mutation appliquée. ChangeId={ChangeId}, CommitSha={Sha}",
                 context.CycleId, context.AppliedChange.Id, commitSha);
 
-            // ── Phase 3 : Tests exhaustifs ────────────────────────────────────
+            // ── Phase 3a : Génération de tests ciblés via Claude Code (graceful fallback) ──────────────
             context.CurrentPhase = CyclePhase.ExhaustiveTesting;
-            _logger.LogInformation("[Cycle {Id}] Phase 3 : Tests exhaustifs", context.CycleId);
+            _logger.LogInformation("[Cycle {Id}] Phase 3a : Génération de tests ciblés", context.CycleId);
+
+            try
+            {
+                var testGenPrompt = await _promptProvider.GetTestGenerationPromptAsync(
+                    context.AppliedChange!,
+                    context.Project!,
+                    topHypothesis.Rationale,
+                    ct);
+
+                var testGenResult = await _claudeCodeExecutor.ExecuteAgenticAsync(
+                    testGenPrompt,
+                    context.Project!.ProjectPath,
+                    ct: ct);
+
+                if (testGenResult.Success && !string.IsNullOrWhiteSpace(testGenResult.Output))
+                {
+                    _logger.LogInformation("[Cycle {Id}] Tests générés : {Output}",
+                        context.CycleId,
+                        testGenResult.Output[..Math.Min(300, testGenResult.Output.Length)]);
+                }
+                else
+                {
+                    _logger.LogWarning("[Cycle {Id}] Génération de tests échouée ou vide — exécution des tests existants.", context.CycleId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Cycle {Id}] Erreur lors de la génération de tests — on continue sans.", context.CycleId);
+            }
+
+            // ── Phase 3b : Tests exhaustifs ────────────────────────────────────
+            _logger.LogInformation("[Cycle {Id}] Phase 3b : Tests exhaustifs", context.CycleId);
 
             var baseline = await _baselineStore.GetLatestBaselineAsync(ct);
             context.TestResults = await _testRunner.RunAllTestsAsync(context, ct);
@@ -303,10 +354,11 @@ public sealed class CycleOrchestrator : BackgroundService
             context.CurrentPhase = CyclePhase.DecisionAndComparison;
             _logger.LogInformation("[Cycle {Id}] Phase 4 : Évaluation", context.CycleId);
 
-            var evaluationPrompt = PromptTemplates.EvaluateChanges(
+            var evaluationPrompt = await _promptProvider.GetEvaluationPromptAsync(
                 topHypothesis,
                 context.TestResults,
-                baseline);
+                baseline,
+                ct);
 
             var evaluationResult = await _claudeCodeExecutor.ExecuteAsync(
                 evaluationPrompt,

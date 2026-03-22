@@ -107,48 +107,88 @@ public static class PromptTemplates
     }
 
     /// <summary>
-    /// Génère le prompt pour la Phase 2: Application de mutation.
+    /// Génère le prompt pour la Phase 2: Application de mutation (mode agentique).
+    /// Claude doit modifier les fichiers directement via ses outils Edit/Write — pas de JSON.
     /// </summary>
     public static string ApplyMutation(Hypothesis hypothesis, ProjectInfo project)
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine($"You are modifying a {project.Type} project to implement an improvement.");
+        sb.AppendLine($"You are improving a {project.Type} project written in {project.Language ?? "an unknown language"}.");
         sb.AppendLine();
-        sb.AppendLine("**Hypothesis to implement**:");
+        sb.AppendLine("**Improvement to implement**:");
         sb.AppendLine($"Description: {hypothesis.Rationale}");
         sb.AppendLine($"Type: {hypothesis.Type}");
-        sb.AppendLine($"Target: {hypothesis.TargetFile}");
+        sb.AppendLine($"Target file: {hypothesis.TargetFile}");
         if (!string.IsNullOrEmpty(hypothesis.TargetMethod))
-            sb.AppendLine($"Method: {hypothesis.TargetMethod}");
-        sb.AppendLine($"Expected Impact: {hypothesis.ExpectedImpact:P0}");
-        sb.AppendLine($"Confidence: {hypothesis.ConfidenceScore:P0}");
+            sb.AppendLine($"Target method: {hypothesis.TargetMethod}");
+        sb.AppendLine($"Expected impact: {hypothesis.ExpectedImpact}/10");
         sb.AppendLine();
-        sb.AppendLine("**Files to modify**:");
-        sb.AppendLine($"Primary: {hypothesis.TargetFile}");
+        sb.AppendLine("**Project context**:");
+        sb.AppendLine($"- Path: {project.ProjectPath}");
+        if (!string.IsNullOrEmpty(project.Framework))
+            sb.AppendLine($"- Framework: {project.Framework}");
+        if (project.SourcePatterns.Count > 0)
+            sb.AppendLine($"- Source patterns: {string.Join(", ", project.SourcePatterns)}");
         sb.AppendLine();
-        sb.AppendLine("**Task**: Apply the necessary code changes to implement this improvement.");
+        sb.AppendLine("**Instructions**:");
+        sb.AppendLine("1. Read the target file and understand the existing code.");
+        sb.AppendLine("2. Apply the improvement described above using your Edit or Write tools.");
+        sb.AppendLine("3. Make minimal, focused changes — preserve all existing functionality.");
+        sb.AppendLine("4. Follow the project's existing code style and conventions.");
+        sb.AppendLine("5. If necessary, read related files to understand context before editing.");
         sb.AppendLine();
-        sb.AppendLine("Guidelines:");
-        sb.AppendLine("1. Make minimal, focused changes");
-        sb.AppendLine("2. Preserve existing functionality");
-        sb.AppendLine("3. Follow the project's existing code style");
-        sb.AppendLine("4. Include necessary imports/dependencies");
-        sb.AppendLine("5. Add comments for non-obvious changes");
+        sb.AppendLine("Do NOT return JSON. Use your Edit/Write tools to modify the file(s) directly on disk.");
+        sb.AppendLine("After applying the changes, briefly summarize what you modified (1-3 lines).");
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Génère le prompt pour la Phase 3a : Génération de tests ciblés sur la mutation (mode agentique).
+    /// Claude doit explorer les conventions de test du projet et écrire des tests directement sur disque.
+    /// </summary>
+    public static string GenerateTargetedTests(
+        ChangeRecord appliedChange,
+        ProjectInfo project,
+        string hypothesisRationale)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine($"You are writing targeted tests for a {project.Type} project written in {project.Language ?? "an unknown language"}.");
         sb.AppendLine();
-        sb.AppendLine("Format your response as valid JSON:");
-        sb.AppendLine("```json");
-        sb.AppendLine("{");
-        sb.AppendLine("  \"changes\": [");
-        sb.AppendLine("    {");
-        sb.AppendLine("      \"filePath\": \"path/to/file\",");
-        sb.AppendLine("      \"changeType\": \"modify\",");
-        sb.AppendLine("      \"diff\": \"unified diff format\"");
-        sb.AppendLine("    }");
-        sb.AppendLine("  ],");
-        sb.AppendLine("  \"summary\": \"Brief description of what was changed\"");
-        sb.AppendLine("}");
-        sb.AppendLine("```");
+        sb.AppendLine("**Code change that was just applied**:");
+        sb.AppendLine($"- Modified file: {appliedChange.FilePath}");
+        sb.AppendLine($"- Rationale: {hypothesisRationale}");
+        sb.AppendLine($"- Mutation type: {appliedChange.MutationType}");
+        if (!string.IsNullOrWhiteSpace(appliedChange.UnifiedDiff))
+        {
+            sb.AppendLine();
+            sb.AppendLine("**Unified diff of the change**:");
+            sb.AppendLine("```diff");
+            // Limit diff length to avoid over-sized prompts
+            var diff = appliedChange.UnifiedDiff;
+            sb.AppendLine(diff.Length > 3000 ? diff[..3000] + "\n... (truncated)" : diff);
+            sb.AppendLine("```");
+        }
+        sb.AppendLine();
+        sb.AppendLine("**Project context**:");
+        sb.AppendLine($"- Path: {project.ProjectPath}");
+        if (!string.IsNullOrEmpty(project.TestCommand))
+            sb.AppendLine($"- Test command: {project.TestCommand}");
+        if (!string.IsNullOrEmpty(project.Framework))
+            sb.AppendLine($"- Framework: {project.Framework}");
+        sb.AppendLine();
+        sb.AppendLine("**Instructions**:");
+        sb.AppendLine("1. Explore the project's existing test files to understand conventions (naming, structure, assertion style).");
+        sb.AppendLine("2. Read the modified file to understand the changed code.");
+        sb.AppendLine("3. Write 2-5 targeted unit tests that specifically exercise the modified code.");
+        sb.AppendLine("4. Place the test file following the project's existing test structure.");
+        sb.AppendLine("5. Ensure tests use the project's existing test framework and assertion library.");
+        sb.AppendLine("6. Tests should cover: happy path, edge cases, and regression for the modified logic.");
+        sb.AppendLine();
+        sb.AppendLine("Do NOT return JSON. Write the test file(s) directly to disk using your Write or Edit tools.");
+        sb.AppendLine("After writing, list each created/modified file prefixed with 'CREATED: ' or 'MODIFIED: '.");
 
         return sb.ToString();
     }

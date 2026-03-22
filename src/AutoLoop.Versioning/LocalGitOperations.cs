@@ -21,6 +21,7 @@ public interface ILocalGitOperations
     void CheckoutFilesFromHead(string filePath);
     void CheckoutBranch(string branchName);
     string GetCurrentBranchName();
+    string GetUnifiedDiff();
 }
 
 public sealed class LibGit2SharpOperations : ILocalGitOperations
@@ -187,5 +188,15 @@ public sealed class LibGit2SharpOperations : ILocalGitOperations
     {
         using var repo = new Repository(_options.RepositoryPath);
         return repo.Head.FriendlyName;
+    }
+
+    public string GetUnifiedDiff()
+    {
+        using var repo = new Repository(_options.RepositoryPath);
+        var headTree = repo.Head.Tip?.Tree;
+        var patch = headTree != null
+            ? repo.Diff.Compare<Patch>(headTree, DiffTargets.WorkingDirectory | DiffTargets.Index)
+            : repo.Diff.Compare<Patch>(null, DiffTargets.WorkingDirectory | DiffTargets.Index);
+        return patch.Content;
     }
 }

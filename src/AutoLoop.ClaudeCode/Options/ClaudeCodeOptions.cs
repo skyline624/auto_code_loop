@@ -27,4 +27,10 @@ public sealed class ClaudeCodeOptions
 
     /// <summary>Activer le mode debug pour les logs détaillés.</summary>
     public bool DebugMode { get; set; } = false;
+
+    /// <summary>Timeout pour le mode agentique (sans --print) en millisecondes.</summary>
+    public int AgenticTimeoutMs { get; set; } = 600_000; // 10 minutes
+
+    /// <summary>Utiliser les prompts adaptatifs générés par Claude pour chaque projet.</summary>
+    public bool UseAdaptivePrompts { get; set; } = true;
 }

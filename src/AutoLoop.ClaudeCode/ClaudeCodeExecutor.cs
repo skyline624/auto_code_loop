@@ -41,7 +41,7 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
         _logger.LogDebug("Prompt ({Length} chars): {Prompt}", finalPrompt.Length, finalPrompt[..Math.Min(200, finalPrompt.Length)]);
 
         var startedAt = DateTimeOffset.UtcNow;
-        var (exitCode, stdout, stderr) = await RunClaudeCodeAsync(args, finalPrompt, ct);
+        var (exitCode, stdout, stderr) = await RunClaudeCodeAsync(args, finalPrompt, ct, Directory.GetCurrentDirectory(), _options.TimeoutMs);
         var completedAt = DateTimeOffset.UtcNow;
 
         // Parser les métriques de tokens
@@ -104,6 +104,73 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
         };
     }
 
+    public async Task<ClaudeCodeResult> ExecuteAgenticAsync(
+        string prompt,
+        string workingDirectory,
+        IEnumerable<string>? contextFiles = null,
+        CancellationToken ct = default)
+    {
+        var args = BuildAgenticArguments(contextFiles);
+
+        _logger.LogDebug("Exécution Claude Code agentique dans {WorkingDir}", workingDirectory);
+        _logger.LogDebug("Prompt agentique ({Length} chars): {Prompt}", prompt.Length, prompt[..Math.Min(200, prompt.Length)]);
+
+        var startedAt = DateTimeOffset.UtcNow;
+        var (exitCode, stdout, stderr) = await RunClaudeCodeAsync(args, prompt, ct, workingDirectory, _options.AgenticTimeoutMs);
+        var completedAt = DateTimeOffset.UtcNow;
+
+        var (inputTokens, outputTokens) = ParseTokenCounts(stderr);
+
+        var result = new ClaudeCodeResult
+        {
+            Output = stdout,
+            RawPrompt = prompt,
+            StartedAt = startedAt,
+            CompletedAt = completedAt,
+            ExitCode = exitCode,
+            ErrorOutput = exitCode != 0 ? stderr : null,
+            Duration = completedAt - startedAt,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens
+        };
+
+        if (result.Success)
+            _logger.LogInformation("Claude Code agentique terminé en {Duration}ms.", result.Duration.TotalMilliseconds);
+        else
+            _logger.LogError("Claude Code agentique a échoué (code {ExitCode}). Stderr: {Stderr}",
+                exitCode, stderr[..Math.Min(500, stderr.Length)]);
+
+        return result;
+    }
+
+    private List<string> BuildAgenticArguments(IEnumerable<string>? contextFiles)
+    {
+        // Mode agentique : pas de --print, Claude utilise ses outils natifs (Edit/Write/Bash)
+        var args = new List<string> { "--dangerously-skip-permissions" };
+
+        if (!string.IsNullOrEmpty(_options.DefaultModel) && _options.DefaultModel != "claude-sonnet-4-6")
+        {
+            args.Add("--model");
+            args.Add(_options.DefaultModel);
+        }
+
+        if (contextFiles != null)
+        {
+            var filesToAdd = contextFiles
+                .Where(f => !string.IsNullOrEmpty(f))
+                .Take(_options.ContextFileLimit)
+                .ToList();
+
+            foreach (var file in filesToAdd)
+            {
+                args.Add("--context");
+                args.Add(file);
+            }
+        }
+
+        return args;
+    }
+
     private List<string> BuildArguments(IEnumerable<string>? contextFiles)
     {
         var args = new List<string> { "--print" };
@@ -143,7 +210,9 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
     private async Task<(int exitCode, string stdout, string stderr)> RunClaudeCodeAsync(
         List<string> args,
         string prompt,
-        CancellationToken ct)
+        CancellationToken ct,
+        string workingDirectory,
+        int timeoutMs)
     {
         using var process = new Process
         {
@@ -156,7 +225,7 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                WorkingDirectory = Directory.GetCurrentDirectory()
+                WorkingDirectory = workingDirectory
             }
         };
 
@@ -181,7 +250,7 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
 
         // Attendre avec timeout
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(_options.TimeoutMs);
+        cts.CancelAfter(timeoutMs);
 
         try
         {
@@ -189,10 +258,10 @@ public sealed class ClaudeCodeExecutor : IClaudeCodeExecutor
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("Claude Code a dépassé le timeout de {Timeout}ms. Processus tué.", _options.TimeoutMs);
+            _logger.LogWarning("Claude Code a dépassé le timeout de {Timeout}ms. Processus tué.", timeoutMs);
             process.Kill();
             await process.WaitForExitAsync(ct);
-            throw new TimeoutException($"Claude Code a dépassé le timeout de {_options.TimeoutMs}ms");
+            throw new TimeoutException($"Claude Code a dépassé le timeout de {timeoutMs}ms");
         }
 
         var stdout = await stdoutTask;
