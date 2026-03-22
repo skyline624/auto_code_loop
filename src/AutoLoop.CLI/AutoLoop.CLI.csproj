@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AutoLoop.CLI</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AutoLoop.Core/AutoLoop.Core.csproj" />
+    <ProjectReference Include="../AutoLoop.Logging/AutoLoop.Logging.csproj" />
+    <ProjectReference Include="../AutoLoop.Monitoring/AutoLoop.Monitoring.csproj" />
+    <ProjectReference Include="../AutoLoop.Versioning/AutoLoop.Versioning.csproj" />
+    <ProjectReference Include="../AutoLoop.Rollback/AutoLoop.Rollback.csproj" />
+    <ProjectReference Include="../AutoLoop.Hypothesis/AutoLoop.Hypothesis.csproj" />
+    <ProjectReference Include="../AutoLoop.Mutation/AutoLoop.Mutation.csproj" />
+    <ProjectReference Include="../AutoLoop.Testing/AutoLoop.Testing.csproj" />
+    <ProjectReference Include="../AutoLoop.Evaluation/AutoLoop.Evaluation.csproj" />
+    <ProjectReference Include="../AutoLoop.ClaudeCode/AutoLoop.ClaudeCode.csproj" />
+    <ProjectReference Include="../AutoLoop.ProjectDetection/AutoLoop.ProjectDetection.csproj" />
+    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Serilog.Extensions.Hosting" />
+    <PackageReference Include="Serilog.Settings.Configuration" />
+    <PackageReference Include="Serilog.Sinks.Console" />
+    <PackageReference Include="Serilog.Sinks.File" />
+    <PackageReference Include="Serilog.Formatting.Compact" />
+    <PackageReference Include="Serilog.Enrichers.Environment" />
+    <PackageReference Include="Serilog.Enrichers.Thread" />
+    <PackageReference Include="prometheus-net.AspNetCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>appsettings.json</Link>
+    </Content>
+    <Content Include="../../appsettings.Development.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>appsettings.Development.json</Link>
+    </Content>
+  </ItemGroup>
+</Project>
